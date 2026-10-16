@@ -1,0 +1,52 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/ubuntu2204"
+
+  config.vm.define "app" do |app|
+    app.vm.hostname = "app"
+
+    # Внутренняя сеть (пункт e): "app" ходит во внешний мир только через
+    # NAT на "gateway" (192.168.56.1), а не напрямую через свой eth0.
+    app.vm.network "private_network",
+      ip: "192.168.56.10",
+      libvirt__network_name: "nat_lab_internal",
+      libvirt__forward_mode: "none",
+      libvirt__dhcp_enabled: false,
+      libvirt__host_ip: "192.168.56.254"
+
+    app.vm.provider :libvirt do |lv|
+      lv.memory = 1024
+      lv.cpus = 1
+    end
+
+    app.vm.provision "ansible" do |ansible|
+      ansible.playbook = "ansible/app.yml"
+    end
+  end
+
+  config.vm.define "gateway" do |gateway|
+    gateway.vm.hostname = "gateway"
+
+    # Первый (eth0) интерфейс — дефолтная NAT-сеть vagrant-libvirt, та же, что
+    # и у "app" (это "внешняя" сеть — через неё gateway сам ходит в интернет).
+    # Второй интерфейс — отдельная приватная сеть ("внутренняя"): сюда позже
+    # (пункт e) переедет VM "app".
+    gateway.vm.network "private_network",
+      ip: "192.168.56.1",
+      libvirt__network_name: "nat_lab_internal",
+      libvirt__forward_mode: "none",
+      libvirt__dhcp_enabled: false,
+      libvirt__host_ip: "192.168.56.254"
+
+    gateway.vm.provider :libvirt do |lv|
+      lv.memory = 1024
+      lv.cpus = 1
+    end
+
+    gateway.vm.provision "ansible" do |ansible|
+      ansible.playbook = "ansible/gateway.yml"
+    end
+  end
+end

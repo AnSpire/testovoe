@@ -1,0 +1,72 @@
+---
+- name: Install OS prerequisites
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - iputils-ping
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create dedicated system group for the app
+  group:
+    name: appuser
+    system: true
+
+- name: Create dedicated system user for the app
+  user:
+    name: appuser
+    group: appuser
+    system: true
+    create_home: true
+    home: /opt/app
+    shell: /usr/sbin/nologin
+
+- name: Copy application source files
+  copy:
+    src: "{{ project_root }}/{{ item }}"
+    dest: "/opt/app/{{ item }}"
+    owner: appuser
+    group: appuser
+    mode: "0644"
+  loop:
+    - main.py
+    - pyproject.toml
+    - uv.lock
+
+- name: Check whether uv is already installed for appuser
+  stat:
+    path: /opt/app/.local/bin/uv
+  register: uv_bin
+
+- name: Install uv for appuser
+  become: true
+  become_user: appuser
+  shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+  args:
+    chdir: /opt/app
+  when: not uv_bin.stat.exists
+
+- name: Sync project dependencies with uv (downloads the pinned Python too)
+  become: true
+  become_user: appuser
+  command: /opt/app/.local/bin/uv sync --frozen
+  args:
+    chdir: /opt/app
+  environment:
+    HOME: /opt/app
+
+- name: Install systemd unit for the app
+  template:
+    src: app.service.j2
+    dest: /etc/systemd/system/app.service
+    mode: "0644"
+  notify: restart app
+
+- name: Enable and start the app service
+  systemd:
+    name: app.service
+    enabled: true
+    state: started
+    daemon_reload: true

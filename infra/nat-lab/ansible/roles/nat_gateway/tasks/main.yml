@@ -1,0 +1,57 @@
+---
+- name: Install OS prerequisites
+  apt:
+    name:
+      - iptables-persistent
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Enable IPv4 forwarding (persisted across reboots via sysctl.conf)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_set: true
+    state: present
+    reload: true
+
+- name: Determine external interface (the one with the default route)
+  set_fact:
+    gw_ext_iface: "{{ ansible_default_ipv4.interface }}"
+
+- name: Determine internal interface (the other active NIC)
+  set_fact:
+    gw_int_iface: "{{ ansible_interfaces | difference(['lo', gw_ext_iface]) | first }}"
+
+- name: Masquerade outbound traffic leaving via the external interface
+  iptables:
+    table: nat
+    chain: POSTROUTING
+    out_interface: "{{ gw_ext_iface }}"
+    jump: MASQUERADE
+    comment: "nat-lab: masquerade internal -> external"
+
+- name: Allow forwarding from the internal network out to the external interface
+  iptables:
+    chain: FORWARD
+    in_interface: "{{ gw_int_iface }}"
+    out_interface: "{{ gw_ext_iface }}"
+    jump: ACCEPT
+    comment: "nat-lab: internal -> external"
+
+- name: Allow forwarding of established/related return traffic
+  iptables:
+    chain: FORWARD
+    in_interface: "{{ gw_ext_iface }}"
+    out_interface: "{{ gw_int_iface }}"
+    ctstate:
+      - ESTABLISHED
+      - RELATED
+    jump: ACCEPT
+    comment: "nat-lab: external -> internal (return traffic)"
+
+- name: Save iptables rules so they survive a VM reboot
+  command: netfilter-persistent save
+  changed_when: false

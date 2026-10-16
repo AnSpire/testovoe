@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Vagrant local state (per-machine SSH keys, IDs) — not reproducible/shareable
+.vagrant/

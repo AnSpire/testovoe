@@ -1,0 +1,8 @@
+---
+- name: Deploy test app on the app VM
+  hosts: app
+  become: true
+  roles:
+    - box_dns_fix
+    - app_network
+    - app_deploy

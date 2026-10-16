@@ -1,0 +1,40 @@
+---
+# Бокс generic/ubuntu2204 несёт мёртвые DNS-сервера, зашитые сразу в двух
+# местах, плюс DNSSEC=yes, который рвёт резолвинг через наш NAT. Подробности —
+# в infra/nat-lab/reports/b-systemd-deploy.md. Эта роль переиспользуется на
+# всех VM из этого бокса (app, gateway, позже узлы Lab 3).
+
+- name: Fix stale DNS servers baked into the Vagrant box netplan config
+  replace:
+    path: /etc/netplan/01-netcfg.yaml
+    regexp: 'addresses: \[4\.2\.2\.1, 4\.2\.2\.2, 208\.67\.220\.220\]'
+    replace: 'addresses: [8.8.8.8, 1.1.1.1]'
+  register: netplan_dns_fix
+
+- name: Apply netplan after DNS fix
+  command: netplan apply
+  when: netplan_dns_fix.changed
+
+- name: Fix stale global DNS fallback in systemd-resolved
+  replace:
+    path: /etc/systemd/resolved.conf
+    regexp: '^DNS=4\.2\.2\.1 4\.2\.2\.2 208\.67\.220\.220$'
+    replace: 'DNS=8.8.8.8 1.1.1.1'
+  register: resolved_dns_fix1
+
+- name: Disable DNSSEC (breaks resolution through this NAT setup)
+  replace:
+    path: /etc/systemd/resolved.conf
+    regexp: '^DNSSEC=yes$'
+    replace: 'DNSSEC=no'
+  register: resolved_dns_fix2
+
+- name: Set combined DNS-fix-changed fact
+  set_fact:
+    resolved_dns_fix: "{{ resolved_dns_fix1.changed or resolved_dns_fix2.changed }}"
+
+- name: Restart systemd-resolved after DNS fix
+  systemd:
+    name: systemd-resolved
+    state: restarted
+  when: resolved_dns_fix

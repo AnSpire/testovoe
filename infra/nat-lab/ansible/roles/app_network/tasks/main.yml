@@ -1,0 +1,15 @@
+---
+# Пункт e: "app" уходит во внешний мир не через свой eth0, а через NAT на
+# "gateway" (eth1 -> 192.168.56.1). eth0 остаётся только для управления
+# (Vagrant SSH), поэтому у него явно отключён дефолтный маршрут.
+
+- name: Write netplan config with eth1 as the default route via the gateway VM
+  template:
+    src: 01-netcfg.yaml.j2
+    dest: /etc/netplan/01-netcfg.yaml
+    mode: "0600"
+  register: app_netplan
+
+- name: Apply netplan
+  command: netplan apply
+  when: app_netplan.changed

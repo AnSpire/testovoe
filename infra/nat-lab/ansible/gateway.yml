@@ -1,0 +1,7 @@
+---
+- name: Configure NAT gateway VM
+  hosts: gateway
+  become: true
+  roles:
+    - box_dns_fix
+    - nat_gateway

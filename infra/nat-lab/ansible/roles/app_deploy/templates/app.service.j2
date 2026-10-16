@@ -1,0 +1,16 @@
+[Unit]
+Description=Test FastAPI app (Hello/health)
+After=network.target
+
+[Service]
+Type=simple
+User=appuser
+Group=appuser
+WorkingDirectory=/opt/app
+Environment=HOME=/opt/app
+ExecStart=/opt/app/.local/bin/uv run uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
