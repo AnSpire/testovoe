@@ -2,11 +2,13 @@ import asyncio
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 PING_HOST = "77.88.8.8"
 PING_TIMEOUT = 5  # seconds
 
 app = FastAPI()
+Instrumentator().instrument(app).expose(app)
 
 
 @app.post("/", response_class=PlainTextResponse)

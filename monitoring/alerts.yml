@@ -1,0 +1,22 @@
+groups:
+  - name: app
+    rules:
+      - alert: AppDown
+        expr: up{job="app"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Приложение app недоступно"
+          description: "Prometheus не может достучаться до app:8000 дольше 30 секунд."
+
+      - alert: AppHighErrorRate
+        expr: |
+          sum(rate(http_requests_total{job="app", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{job="app"}[5m])) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокая доля 5xx-ответов у app"
+          description: "Больше 10% ответов app за последние 5 минут — коды 5xx."

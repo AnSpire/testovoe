@@ -27,8 +27,9 @@
 1. **Lab 1 (NAT)** — `infra/nat-lab/`: a → b → d2 (NAT-часть) → e.
    Vagrant+libvirt, две VM: `app` (систему, пользователь, systemd) и `gateway`
    (2 NIC, NAT/MASQUERADE), затем `app` переносится во внутреннюю сеть.
-2. **Lab 2 (Docker)** — ещё не начата: c → d1 (Dockerfile + docker-compose с
-   prometheus/alertmanager). Без VM, прямо на хосте (Docker уже установлен).
+2. **Lab 2 (Docker)** — готова: c → d1 (Dockerfile + docker-compose с
+   prometheus/alertmanager). Живёт **в корне репозитория** (не в `infra/` —
+   это не VM-лаба), рядом с `main.py`. Без VM, прямо на хосте.
 3. **Lab 3 (Kubernetes)** — ещё не начата: f → g → h. 3 VM через Vagrant+libvirt,
    kubeadm-кластер, деплой приложения, MetalLB+ingress-nginx для внешнего доступа
    без port-forward.
@@ -52,6 +53,15 @@
 - Стиль работы с пользователем: **спрашивать перед ключевыми архитектурными
   решениями** (через AskUserQuestion), не решать единолично. Мелкие детали
   реализации — можно сразу делать.
+- Lab 2 (Docker, c+d1) — Dockerfile/docker-compose.yml/`monitoring/` лежат в
+  **корне репозитория**, не в `infra/` (это не VM-лаба).
+- В `main.py` добавлен `GET /metrics` через `prometheus-fastapi-instrumentator`
+  (две строчки, не трогает требуемое поведение `POST /` / `GET /health`) —
+  чтобы Prometheus реально скрейпил приложение, а не просто проверял, что
+  порт открыт.
+- Образ приложения пушится в **Docker Hub** под `anspire/testovoe-app` (не
+  свой self-hosted registry) — `docker login` сделан пользователем заранее.
+  Lab 3 (Kubernetes) тянет оттуда же этот образ, не пересобирает заново.
 
 ## Текущий статус
 
@@ -69,17 +79,29 @@
 `infra/nat-lab/reports/d2-e-nat-gateway.md` (там же — важная находка про
 коллизию IP между `gateway` и самой libvirt-сетью, см. граблю №6 ниже).
 
-Репозиторий: всё под `infra/` пока **не закоммичено** (только untracked).
+Lab 1 закоммичен (коммит "Add Lab 1 (NAT): app VM via systemd + gateway VM
+with NAT routing").
+
+**Lab 2 (a→/metrics, c, d1) — готова и подтверждена, но пока НЕ закоммичена.**
+Dockerfile + docker-compose.yml + `monitoring/` в корне репозитория. Образ
+собран и запушен в Docker Hub (`anspire/testovoe-app:latest`). Проверено:
+`POST /` с/без заголовка, `/health`, `/metrics`, Prometheus видит target
+`app` как `up` и знает оба alert-правила, Alertmanager жив. Отчёт:
+`reports/c-d1-docker.md`.
 
 ### Что дальше
 
-**Весь Lab 1 готов — следующий шаг требует явного обсуждения с пользователем,
-не решать самостоятельно:**
-1. Как сохранить результат (git add/commit — пока ничего не закоммичено).
-2. Куда класть Lab 2 (Docker: c → d1) и Lab 3 (Kubernetes: f → g → h) — в тот
-   же `infra/` (`infra/docker-lab/`, `infra/k8s-lab/`) или отдельно.
-
-Технически Lab 2/3 ещё не начаты.
+1. Закоммитить Lab 2 (спросить пользователя, если не очевидно — но для
+   Lab 1 пользователь уже явно попросил коммитить по готовности лабы, так
+   что скорее всего и здесь будет "да").
+2. Начать **Lab 3 (Kubernetes)**: f → g → h. 3 VM через Vagrant+libvirt
+   (аналогично Lab 1 — те же грабли с боксом `generic/ubuntu2204` см. ниже,
+   применить `box_dns_fix`-подобный фикс заранее), kubeadm-кластер
+   (1 control-plane + 2 worker), деплой `anspire/testovoe-app:latest` из
+   Docker Hub (задача g), Ingress через MetalLB + ingress-nginx без
+   `kubectl port-forward` (задача h). Расположение — предположительно
+   `infra/k8s-lab/` (по аналогии с `infra/nat-lab/`), но не решено с
+   пользователем окончательно.
 
 ## Грабли, на которые наступали (чтобы не наступать повторно)
 

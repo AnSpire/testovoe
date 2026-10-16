@@ -1,0 +1,16 @@
+# Минимальная конфигурация для лабы: все алерты идут в единственный
+# receiver "default", который ничего никуда не отправляет (нет настроенного
+# канала — slack/email/webhook). В реальном проекте сюда добавляется
+# настоящий integration (slack_configs / email_configs / webhook_configs).
+# Проверить, что алерты долетают до Alertmanager, можно через его UI
+# (http://localhost:9093) или API /api/v2/alerts.
+
+route:
+  receiver: default
+  group_by: ["alertname"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+
+receivers:
+  - name: default
