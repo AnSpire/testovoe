@@ -1,0 +1,26 @@
+---
+- name: Base OS prep + Kubernetes packages on every node
+  hosts: all
+  become: true
+  roles:
+    - box_dns_fix
+    - common
+    - kubeadm_pkgs
+
+- name: Initialize control-plane
+  hosts: k8s_masters
+  become: true
+  roles:
+    - k8s_master
+
+- name: Join worker nodes
+  hosts: k8s_workers
+  become: true
+  roles:
+    - k8s_worker
+
+- name: Install cluster add-ons and deploy the app (runs on control-plane only)
+  hosts: k8s_masters
+  become: true
+  roles:
+    - k8s_apps

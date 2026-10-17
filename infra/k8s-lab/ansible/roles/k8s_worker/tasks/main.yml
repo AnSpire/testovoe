@@ -1,0 +1,9 @@
+---
+- name: Check whether this node has already joined a cluster
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Run kubeadm join using the command generated on the control-plane
+  command: "{{ hostvars['k8s-master']['join_command'] }}"
+  when: not kubelet_conf.stat.exists

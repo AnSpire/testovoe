@@ -1,0 +1,19 @@
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: k8s-lab-pool
+  namespace: metallb-system
+spec:
+  addresses:
+{% for ip in metallb_pool_ips %}
+    - {{ ip }}/32
+{% endfor %}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: k8s-lab-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - k8s-lab-pool

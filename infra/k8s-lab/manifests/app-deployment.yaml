@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: testovoe-app
+  labels:
+    app: testovoe-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: testovoe-app
+  template:
+    metadata:
+      labels:
+        app: testovoe-app
+    spec:
+      # Предпочитаем раскидать реплики по разным нодам, чтобы наглядно было
+      # видно отказоустойчивость (kubectl get pods -o wide -> разные ноды).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: testovoe-app
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: testovoe-app
+          image: anspire/testovoe-app:latest
+          ports:
+            - containerPort: 8000
+          # Не используем /health как liveness/readiness — он реально пингует
+          # внешний 77.88.8.8, и завязывать перезапуски контейнера на внешнюю
+          # сеть было бы нестабильно. Проверяем просто, что порт слушает.
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10

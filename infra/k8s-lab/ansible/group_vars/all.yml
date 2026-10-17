@@ -1,0 +1,25 @@
+---
+# Единственная сеть у всех трёх нод — дефолтная NAT-сеть vagrant-libvirt
+# (её IP ноды получают по DHCP, адрес узнаём через ansible_default_ipv4 —
+# подсеть каждый раз создаётся заново и не захардкожена).
+k8s_version: "1.30"
+pod_network_cidr: "192.168.0.0/16"
+# Намеренно VXLAN-манифест, а не стандартный calico.yaml (BGP/BIRD):
+# при BGP-режиме Calico на флэт-сети (все 3 ноды в одной L2-подсети)
+# демон BIRD реэкспортирует соседям "прямой" маршрут до собственной
+# подсети ноды — и те устанавливают для адреса шлюза паразитный /32
+# маршрут через другую ноду, из-за чего внешняя сеть периодически
+# полностью пропадает (см. infra/k8s-lab/reports/f-k8s-cluster.md).
+# В VXLAN-режиме (calico_backend: vxlan) BIRD не используется вообще —
+# маршруты до pod-подсетей других нод Calico программирует статически
+# через свой датастор, без какого-либо протокола маршрутизации.
+calico_manifest_url: "https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico-vxlan.yaml"
+
+metallb_version: "v0.14.8"
+# Диапазон для MetalLB вычисляется динамически в k8s_apps (последние адреса
+# той же подсети, что и у нод — см. templates/metallb-pool.yaml.j2).
+
+ingress_nginx_version: "controller-v1.11.2"
+
+app_image: "anspire/testovoe-app:latest"
+app_ingress_host: "app.test"

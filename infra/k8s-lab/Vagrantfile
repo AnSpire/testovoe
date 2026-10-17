@@ -1,0 +1,47 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/ubuntu2204"
+
+  nodes = {
+    "k8s-master"  => { memory: 2560, cpus: 2 },
+    "k8s-worker1" => { memory: 2048, cpus: 2 },
+    "k8s-worker2" => { memory: 2048, cpus: 2 },
+  }
+
+  # Изначально у каждой ноды было по два интерфейса (внешний + отдельная
+  # внутренняя сеть под кластер). Отказались от этого: Calico по умолчанию
+  # анонсирует соседним узлам маршруты СО ВСЕХ интерфейсов, не только с
+  # "основного" — а подсеть внешней vagrant-NAT сети одинакова на всех
+  # 3 нодах, так что каждая анонсировала её как "свою", и соседи получали
+  # битый маршрут на адрес шлюза через оверлей Calico (внешняя сеть то
+  # пропадала). Подробности — infra/k8s-lab/reports/f-k8s-cluster.md.
+  # Поэтому используем только одну, штатную NAT-сеть vagrant-libvirt — и
+  # интернет, и кластерный трафик, и пул MetalLB идут через неё же.
+  nodes.each_with_index do |(name, opts), index|
+    config.vm.define name do |node|
+      node.vm.hostname = name
+
+      node.vm.provider :libvirt do |lv|
+        lv.memory = opts[:memory]
+        lv.cpus = opts[:cpus]
+      end
+
+      # Ansible-провижининг запускаем только с последней поднятой машины
+      # (стандартный паттерн Vagrant для multi-machine Ansible): к этому
+      # моменту все 3 VM уже существуют, inventory видит их все сразу,
+      # ansible.limit = "all" прогоняет playbook на всём кластере одним разом.
+      if index == nodes.size - 1
+        node.vm.provision "ansible" do |ansible|
+          ansible.playbook = "ansible/site.yml"
+          ansible.limit = "all"
+          ansible.groups = {
+            "k8s_masters" => ["k8s-master"],
+            "k8s_workers" => ["k8s-worker1", "k8s-worker2"],
+          }
+        end
+      end
+    end
+  end
+end

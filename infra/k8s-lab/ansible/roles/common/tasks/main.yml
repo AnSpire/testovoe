@@ -1,0 +1,91 @@
+---
+# Общая подготовка ОС для kubeadm на всех трёх нодах: выключить swap, включить
+# модули ядра/sysctl, нужные для Pod-сети и iptables-based kube-proxy, и
+# поставить containerd как CRI.
+
+- name: Disable swap now
+  command: swapoff -a
+  changed_when: false
+
+- name: Remove swap entries from /etc/fstab (kubelet refuses to start with swap on)
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\sswap\s.*)$'
+    replace: '# \1'
+
+- name: Load kernel modules required by the container runtime and Pod networking
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Persist kernel modules across reboots
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    mode: "0644"
+
+- name: Set sysctls required by kube-proxy (bridged traffic through iptables) and routing
+  copy:
+    dest: /etc/sysctl.d/k8s.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables  = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward                 = 1
+      # У сети нет реального IPv6-маршрута, а DNS для docker.io возвращает
+      # AAAA-записи — containerd иногда сначала пробует IPv6 (happy eyeballs),
+      # ловит "cannot assign requested address" и только потом откатывается
+      # на IPv4, из-за чего пулл образов с Docker Hub (включая наш
+      # anspire/testovoe-app) периодически уходит в ImagePullBackOff до
+      # повторной попытки. Отключаем IPv6 на нодах целиком, чтобы не ловить
+      # эту гонку вообще.
+      net.ipv6.conf.all.disable_ipv6  = 1
+      net.ipv6.conf.default.disable_ipv6 = 1
+    mode: "0644"
+  register: k8s_sysctl
+
+- name: Apply sysctls
+  command: sysctl --system
+  when: k8s_sysctl.changed
+
+- name: Install containerd and its dependencies
+  apt:
+    name:
+      - containerd
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Generate default containerd config
+  command: containerd config default
+  register: containerd_default_config
+  changed_when: false
+
+- name: Ensure /etc/containerd exists (the apt package doesn't create it until first run)
+  file:
+    path: /etc/containerd
+    state: directory
+    mode: "0755"
+
+- name: Write containerd config with SystemdCgroup enabled (required by kubelet's cgroup driver)
+  copy:
+    dest: /etc/containerd/config.toml
+    content: "{{ containerd_default_config.stdout | regex_replace('SystemdCgroup = false', 'SystemdCgroup = true') }}"
+    mode: "0644"
+  register: containerd_config
+
+- name: Enable and (re)start containerd
+  systemd:
+    name: containerd
+    enabled: true
+    state: "{{ 'restarted' if containerd_config.changed else 'started' }}"

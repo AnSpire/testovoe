@@ -1,0 +1,121 @@
+---
+# Выполняется один раз на control-plane, после того как все воркеры уже
+# присоединились: ставит MetalLB (LoadBalancer для bare-metal/VM-кластера,
+# без облачного балансировщика) + ingress-nginx, затем деплоит приложение
+# и Ingress на него (пункты g и h). Везде используется /etc/kubernetes/admin.conf
+# напрямую — это root'овый kubeconfig, уже лежит на ноде после kubeadm init.
+
+- name: Wait for all nodes to report Ready
+  command: kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o jsonpath="{.items[*].status.conditions[?(@.type=='Ready')].status}"
+  register: nodes_ready
+  until: nodes_ready.stdout.split() | unique == ['True']
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Install MetalLB
+  command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f
+    https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml
+  register: metallb_apply
+  changed_when: "'unchanged' not in metallb_apply.stdout"
+
+- name: Wait for the MetalLB webhook to become available (IPAddressPool CRs fail until it is)
+  command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf -n metallb-system
+    wait --for=condition=Available deployment/controller --timeout=180s
+  changed_when: false
+
+# Единственная сеть у нод — DHCP-сеть vagrant-libvirt, адреса раздаются не
+# по порядку, так что "последние адреса подсети свободны" не гарантировано
+# (на практике уже ловили коллизию с одной из нод). Поэтому выбираем для
+# MetalLB несколько кандидатов из той же подсети и явно выкидываем из них
+# IP самих нод + всё, что отвечает на ping (значит, уже кем-то занято).
+# Делаем это только при первом прогоне: пул, подобранный один раз, больше не
+# трогаем — иначе повторный vagrant provision каждый раз пересчитывает
+# другой набор адресов (ведь прошлые уже заняты самим MetalLB) и дёргает
+# внешний IP приложения без необходимости.
+- name: Check whether the MetalLB address pool already exists
+  command: kubectl --kubeconfig=/etc/kubernetes/admin.conf get ipaddresspool k8s-lab-pool -n metallb-system
+  register: metallb_pool_exists
+  failed_when: false
+  changed_when: false
+
+- name: Determine this subnet's prefix and the IPs the 3 nodes already use
+  set_fact:
+    subnet_prefix: "{{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}"
+    used_node_ips: "{{ groups['all'] | map('extract', hostvars, ['ansible_default_ipv4', 'address']) | list }}"
+  when: metallb_pool_exists.rc != 0
+
+- name: Build a list of candidate addresses near the top of the subnet
+  set_fact:
+    metallb_candidates: "{{ range(240, 250) | map('string') | map('regex_replace', '^', subnet_prefix + '.') | list }}"
+  when: metallb_pool_exists.rc != 0
+
+- name: Ping each candidate to rule out addresses already leased to something else
+  command: "ping -c1 -W1 {{ item }}"
+  loop: "{{ metallb_candidates | difference(used_node_ips) }}"
+  register: metallb_candidate_pings
+  failed_when: false
+  changed_when: false
+  when: metallb_pool_exists.rc != 0
+
+- name: Keep only the first 3 candidates that did not answer to ping
+  set_fact:
+    metallb_pool_ips: "{{ (metallb_candidate_pings.results | rejectattr('rc', 'eq', 0) | map(attribute='item') | list)[:3] }}"
+  when: metallb_pool_exists.rc != 0
+
+- name: Render MetalLB IPAddressPool + L2Advertisement
+  template:
+    src: metallb-pool.yaml.j2
+    dest: /tmp/metallb-pool.yaml
+    mode: "0644"
+  when: metallb_pool_exists.rc != 0
+
+- name: "Apply MetalLB address pool (retried: webhook can still 503 right after Available)"
+  command: kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /tmp/metallb-pool.yaml
+  register: metallb_pool_apply
+  until: metallb_pool_apply.rc == 0
+  retries: 10
+  delay: 5
+  when: metallb_pool_exists.rc != 0
+
+- name: Install ingress-nginx (Service type LoadBalancer, picked up by MetalLB)
+  command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f
+    https://raw.githubusercontent.com/kubernetes/ingress-nginx/{{ ingress_nginx_version }}/deploy/static/provider/cloud/deploy.yaml
+  register: ingress_apply
+  changed_when: "'unchanged' not in ingress_apply.stdout"
+
+- name: Wait for the ingress-nginx controller to be available
+  command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf -n ingress-nginx
+    wait --for=condition=Available deployment/ingress-nginx-controller --timeout=300s
+  changed_when: false
+
+- name: Copy application manifests (Deployment + Service + Ingress) to the control-plane
+  copy:
+    src: "{{ item }}"
+    dest: "/tmp/{{ item | basename }}"
+    mode: "0644"
+  loop:
+    - "{{ playbook_dir }}/../manifests/app-deployment.yaml"
+    - "{{ playbook_dir }}/../manifests/app-service.yaml"
+    - "{{ playbook_dir }}/../manifests/ingress.yaml"
+
+- name: "Apply application manifests (retried: ingress-nginx's admission webhook can still refuse connections right after its Deployment goes Available)"
+  command: "kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f /tmp/{{ item }}"
+  loop:
+    - app-deployment.yaml
+    - app-service.yaml
+    - ingress.yaml
+  register: apply_manifests
+  until: apply_manifests.rc == 0
+  retries: 10
+  delay: 5
+
+- name: Wait for the application Deployment to roll out
+  command: >
+    kubectl --kubeconfig=/etc/kubernetes/admin.conf
+    rollout status deployment/testovoe-app --timeout=180s
+  changed_when: false
