@@ -1,0 +1,6 @@
+---
+- name: Provision the Jenkins CI/CD lab VM
+  hosts: all
+  become: true
+  roles:
+    - jenkins

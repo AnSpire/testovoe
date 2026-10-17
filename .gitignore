@@ -11,3 +11,6 @@ wheels/
 
 # Vagrant local state (per-machine SSH keys, IDs) — not reproducible/shareable
 .vagrant/
+
+# Локальные заметки для ИИ-агента — не часть решения
+CLAUDE.md

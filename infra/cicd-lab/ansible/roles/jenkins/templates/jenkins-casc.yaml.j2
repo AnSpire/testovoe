@@ -1,0 +1,57 @@
+jenkins:
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "{{ jenkins_admin_user }}"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - usernamePassword:
+              scope: GLOBAL
+              id: "git-token"
+              username: "{{ git_repo_owner }}"
+              password: "${GIT_TOKEN}"
+              description: "GitHub PAT for {{ git_repo_owner }}/opd-sem6 (clone + push)"
+
+jobs:
+  - script: |
+      pipelineJob('Job_1') {
+        description('Poll SCM on {{ git_branch }}; clones it into the shared directory and triggers Job_2.')
+        triggers {
+          scm('H/2 * * * *')
+        }
+        definition {
+          cps {
+            script(new File('/etc/jenkins/pipelines/job1.groovy').text)
+            sandbox()
+          }
+        }
+      }
+  - script: |
+      pipelineJob('Job_2') {
+        description('Deletes the configured files from the shared checkout and commits as jenkins; triggers Job_3.')
+        definition {
+          cps {
+            script(new File('/etc/jenkins/pipelines/job2.groovy').text)
+            sandbox()
+          }
+        }
+      }
+  - script: |
+      pipelineJob('Job_3') {
+        description('Force-pushes the shared checkout to the {{ git_result_branch }} branch. Never touches {{ git_branch }}.')
+        definition {
+          cps {
+            script(new File('/etc/jenkins/pipelines/job3.groovy').text)
+            sandbox()
+          }
+        }
+      }

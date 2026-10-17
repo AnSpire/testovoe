@@ -1,0 +1,5 @@
+[Service]
+Environment="CASC_JENKINS_CONFIG=/etc/jenkins/casc_configs/jenkins.yaml"
+Environment="JAVA_OPTS=-Djenkins.install.runSetupWizard=false"
+Environment="JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}"
+Environment="GIT_TOKEN={{ git_token }}"

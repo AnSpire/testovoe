@@ -1,0 +1,26 @@
+// Job_1: Poll SCM на ветке {{ git_branch }}. Каталог общего чекаута
+// пересоздаётся на каждом запуске (а не git pull), чтобы Job_2 всегда
+// начинал с чистого, актуального состояния ветки {{ git_branch }}.
+pipeline {
+    agent any
+
+    stages {
+        stage('Clone') {
+            steps {
+                sh 'rm -rf "{{ shared_project_dir }}"'
+                sh 'mkdir -p "{{ shared_project_dir }}"'
+                dir("{{ shared_project_dir }}") {
+                    git branch: "{{ git_branch }}",
+                        url: "{{ git_repo_url }}",
+                        credentialsId: 'git-token'
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            build job: 'Job_2', wait: false
+        }
+    }
+}

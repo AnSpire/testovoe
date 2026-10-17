@@ -1,0 +1,256 @@
+---
+# Ставит Java 21 (Temurin) + Jenkins из официальных apt-репозиториев,
+# разворачивает конфигурацию через JCasC (без мастера установки) и три
+# job'а (Job_1/2/3), описанные Job DSL-скриптами внутри самого JCasC-конфига.
+# Ни один job не создаётся руками через UI.
+
+# Бокс generic/debian12 несёт ту же болезнь, что generic/ubuntu2204 (см.
+# CLAUDE.md, грабля №3), но зашита она не в netplan (на Debian 12 его нет),
+# а прямо в /etc/network/interfaces (ifupdown): dns-nameserver 4.2.2.1,
+# 4.2.2.2, 208.67.220.220 — старые мёртвые публичные резолверы. ICMP/TCP к
+# ним доходит (поэтому "ping 8.8.8.8" работает), но сам DNS не отвечает —
+# apt/curl виснут на резолвинге внешних хостов (pkg.jenkins.io,
+# packages.adoptium.net), а не на самой сети.
+- name: Fix stale DNS server baked into the box (4.2.2.1 -> 8.8.8.8)
+  lineinfile:
+    path: /etc/network/interfaces
+    regexp: '^dns-nameserver 4\.2\.2\.1$'
+    line: "dns-nameserver 8.8.8.8"
+  register: dns_fix_1
+
+- name: Fix stale DNS server baked into the box (4.2.2.2 -> 1.1.1.1)
+  lineinfile:
+    path: /etc/network/interfaces
+    regexp: '^dns-nameserver 4\.2\.2\.2$'
+    line: "dns-nameserver 1.1.1.1"
+  register: dns_fix_2
+
+- name: Remove third stale DNS server baked into the box (208.67.220.220)
+  lineinfile:
+    path: /etc/network/interfaces
+    regexp: '^dns-nameserver 208\.67\.220\.220$'
+    state: absent
+  register: dns_fix_3
+
+- name: Regenerate resolv.conf via resolvconf after the DNS fix
+  command: resolvconf -u
+  when: dns_fix_1 is changed or dns_fix_2 is changed or dns_fix_3 is changed
+
+- name: Update apt cache and install base prerequisites
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - git
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Ensure apt keyrings directory exists
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+# --- Java 21 (Eclipse Temurin / Adoptium) --------------------------------
+# Debian 12 "bookworm" несёт в основных репозиториях только OpenJDK 17.
+# Берём Temurin 21 из официального apt-репозитория Adoptium, тот же паттерн
+# "сторонний репозиторий + подписывающий ключ", что уже использовался для
+# kubeadm в Lab 3 (infra/k8s-lab/ansible/roles/kubeadm_pkgs/tasks/main.yml).
+
+- name: Check whether the Adoptium apt signing keyring already exists
+  stat:
+    path: /etc/apt/keyrings/adoptium.asc
+  register: adoptium_keyring
+
+- name: Download Adoptium apt signing key
+  get_url:
+    url: https://packages.adoptium.net/artifactory/api/gpg/key/public
+    dest: /etc/apt/keyrings/adoptium.asc
+    mode: "0644"
+  when: not adoptium_keyring.stat.exists
+
+- name: Add Adoptium apt repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb {{ ansible_distribution_release }} main"
+    filename: adoptium
+    state: present
+
+- name: Install Temurin 21 JDK
+  apt:
+    name: temurin-21-jdk
+    state: present
+    update_cache: true
+
+# --- Jenkins --------------------------------------------------------------
+
+- name: Check whether the Jenkins apt signing keyring already exists
+  stat:
+    path: /etc/apt/keyrings/jenkins-keyring.asc
+  register: jenkins_keyring
+
+- name: Download Jenkins apt signing key
+  get_url:
+    # Jenkins периодически ротирует этот ключ и переименовывает файл по году
+    # (jenkins.io-2023.key -> jenkins.io-2026.key и т.д.) — если apt update
+    # снова падает с GPG-ошибкой "NO_PUBKEY", смотреть актуальное имя файла
+    # на https://pkg.jenkins.io/debian-stable/.
+    url: https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+    dest: /etc/apt/keyrings/jenkins-keyring.asc
+    mode: "0644"
+  when: not jenkins_keyring.stat.exists
+
+- name: Add Jenkins apt repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
+    filename: jenkins
+    state: present
+
+- name: Install Jenkins
+  apt:
+    name: jenkins
+    state: present
+    update_cache: true
+  register: jenkins_install
+
+# Пакет Jenkins на Debian запускает сервис сразу после установки. На этом
+# этапе ни плагинов, ни JCasC-конфига ещё нет, поэтому сервис поднимется с
+# мастером установки — останавливаем его и не трогаем, пока всё не разложено.
+- name: Stop Jenkins if the package start-up already kicked it off
+  systemd:
+    name: jenkins
+    state: stopped
+  when: jenkins_install is changed
+
+# --- Плагины ---------------------------------------------------------------
+# jenkins-plugin-cli идёт в комплекте только с официальным Docker-образом
+# Jenkins, но НЕ с apt-пакетом для Debian/Ubuntu — его аналог, тот же jar
+# ("plugin-installation-manager-tool"), приходится скачивать отдельно с
+# GitHub Releases и запускать через `java -jar`. Устанавливается напрямую в
+# $JENKINS_HOME/plugins, сервис при этом не запущен.
+# Идемпотентность: если плагин job-dsl уже на диске, не дёргаем update-center
+# заново при каждом vagrant provision.
+
+- name: Check whether plugins are already installed
+  stat:
+    path: /var/lib/jenkins/plugins/job-dsl.jpi
+  register: jenkins_plugins_installed
+
+- name: Ensure the Jenkins plugins directory exists and is owned by jenkins
+  file:
+    path: /var/lib/jenkins/plugins
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0755"
+  when: not jenkins_plugins_installed.stat.exists
+
+- name: Check whether the Jenkins plugin manager jar is already downloaded
+  stat:
+    path: /opt/jenkins-plugin-manager.jar
+  register: plugin_manager_jar
+
+- name: Download the Jenkins plugin manager tool (plugin-installation-manager-tool)
+  get_url:
+    url: "https://github.com/jenkinsci/plugin-installation-manager-tool/releases/download/{{ jenkins_plugin_manager_version }}/jenkins-plugin-manager-{{ jenkins_plugin_manager_version }}.jar"
+    dest: /opt/jenkins-plugin-manager.jar
+    mode: "0644"
+  when: not plugin_manager_jar.stat.exists
+
+- name: Install required Jenkins plugins via the plugin manager tool
+  command: >
+    java -jar /opt/jenkins-plugin-manager.jar
+    --war /usr/share/java/jenkins.war
+    --plugin-download-directory /var/lib/jenkins/plugins
+    --plugins {{ jenkins_plugins | join(' ') }}
+  become: true
+  become_user: jenkins
+  when: not jenkins_plugins_installed.stat.exists
+
+# --- JCasC-конфиг и Job DSL-скрипты ----------------------------------------
+
+- name: Ensure the JCasC config directory exists
+  file:
+    path: /etc/jenkins/casc_configs
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0750"
+
+- name: Ensure the pipeline scripts directory exists
+  file:
+    path: /etc/jenkins/pipelines
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0750"
+
+- name: Render pipeline script for Job_1 (clone the target branch into the shared dir)
+  template:
+    src: job1-pipeline.groovy.j2
+    dest: /etc/jenkins/pipelines/job1.groovy
+    owner: jenkins
+    group: jenkins
+    mode: "0640"
+
+- name: Render pipeline script for Job_2 (delete configured files, commit as jenkins)
+  template:
+    src: job2-pipeline.groovy.j2
+    dest: /etc/jenkins/pipelines/job2.groovy
+    owner: jenkins
+    group: jenkins
+    mode: "0640"
+
+- name: Render pipeline script for Job_3 (force-push result to the jenkins-result branch)
+  template:
+    src: job3-pipeline.groovy.j2
+    dest: /etc/jenkins/pipelines/job3.groovy
+    owner: jenkins
+    group: jenkins
+    mode: "0640"
+
+- name: Render the JCasC configuration (security, GitHub credential, jobs)
+  template:
+    src: jenkins-casc.yaml.j2
+    dest: /etc/jenkins/casc_configs/jenkins.yaml
+    owner: jenkins
+    group: jenkins
+    mode: "0640"
+
+# --- systemd: пропускаем мастер установки, передаём секреты через env -----
+
+- name: Ensure the systemd override directory for the jenkins unit exists
+  file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    mode: "0755"
+
+- name: Write systemd override with JCasC path, setup-wizard flag and secrets
+  template:
+    src: jenkins-override.conf.j2
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0600"
+  register: jenkins_override
+
+- name: Reload systemd after changing the unit override
+  systemd:
+    daemon_reload: true
+  when: jenkins_override is changed
+
+- name: Enable and (re)start Jenkins
+  systemd:
+    name: jenkins
+    state: restarted
+    enabled: true
+
+- name: Wait for Jenkins HTTP interface to come up (JCasC applies on this boot)
+  uri:
+    url: http://localhost:8080/login
+    status_code: [200, 403]
+  register: jenkins_http
+  until: jenkins_http.status in [200, 403]
+  retries: 60
+  delay: 10

@@ -1,0 +1,49 @@
+// Job_2: удаляет файлы, перечисленные в FILES_TO_DELETE (единственное место,
+// где задан список — group_vars/all.yml -> files_to_delete), из общего
+// чекаута, и коммитит результат от имени jenkins. Если хотя бы одного файла
+// нет — падаем с понятной ошибкой, а не проходим молча.
+pipeline {
+    agent any
+
+    environment {
+        FILES_TO_DELETE = "{{ files_to_delete | join(' ') }}"
+    }
+
+    stages {
+        stage('Delete files') {
+            steps {
+                dir("{{ shared_project_dir }}") {
+                    sh '''
+                        set -e
+                        missing=0
+                        for f in $FILES_TO_DELETE; do
+                            if [ ! -f "$f" ]; then
+                                echo "ERROR: file '$f' not found in the repository, nothing to delete" >&2
+                                missing=1
+                            fi
+                        done
+                        if [ "$missing" -ne 0 ]; then
+                            echo "FAILING: one or more files to delete are missing, see errors above" >&2
+                            exit 1
+                        fi
+
+                        for f in $FILES_TO_DELETE; do
+                            rm -v "$f"
+                        done
+
+                        git config user.name "jenkins"
+                        git config user.email "jenkins@cicd-lab.local"
+                        git add -A
+                        git commit -m "Job_2: remove $FILES_TO_DELETE"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            build job: 'Job_3', wait: false
+        }
+    }
+}

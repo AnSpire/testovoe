@@ -1,0 +1,39 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Lab 4 (CI/CD): одна VM с Jenkins, настроенным через Ansible + JCasC +
+# Job DSL. Секреты (пароль админа Jenkins и GitHub-токен) НЕ хранятся в
+# репозитории — читаются из переменных окружения хоста при запуске
+# `vagrant up`/`vagrant provision` и передаются в Ansible как extra_vars.
+#
+# Запуск:
+#   JENKINS_ADMIN_PASSWORD='...' GIT_TOKEN='ghp_...' vagrant up
+
+jenkins_admin_password = ENV["JENKINS_ADMIN_PASSWORD"]
+git_token = ENV["GIT_TOKEN"]
+
+if jenkins_admin_password.nil? || jenkins_admin_password.empty?
+  abort "Задайте переменную окружения JENKINS_ADMIN_PASSWORD перед запуском vagrant up/provision."
+end
+
+if git_token.nil? || git_token.empty?
+  abort "Задайте переменную окружения GIT_TOKEN (GitHub PAT с правом repo) перед запуском vagrant up/provision."
+end
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/debian12"
+  config.vm.hostname = "cicd-jenkins"
+
+  config.vm.provider :libvirt do |lv|
+    lv.memory = 4096
+    lv.cpus = 2
+  end
+
+  config.vm.provision "ansible" do |ansible|
+    ansible.playbook = "ansible/site.yml"
+    ansible.extra_vars = {
+      jenkins_admin_password: jenkins_admin_password,
+      git_token: git_token,
+    }
+  end
+end

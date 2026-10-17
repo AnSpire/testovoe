@@ -1,0 +1,22 @@
+// Job_3: пушит результат Job_2 в ветку {{ git_result_branch }} (force push
+// разрешён заданием). ВАЖНО: никогда не пушим в {{ git_branch }} — иначе
+// Poll SCM в Job_1 увидел бы "новый" коммит в {{ git_branch }} и зациклил
+// бы всю цепочку сам на себя.
+pipeline {
+    agent any
+
+    stages {
+        stage('Push result') {
+            steps {
+                dir("{{ shared_project_dir }}") {
+                    withCredentials([usernamePassword(credentialsId: 'git-token', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                        sh '''
+                            set -e
+                            git push "https://$GIT_USER:$GIT_PASS@github.com/{{ git_repo_owner }}/opd-sem6.git" HEAD:{{ git_result_branch }} --force
+                        '''
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+---
+jenkins_admin_user: "admin"
+
+git_repo_url: "https://github.com/AnSpire/opd-sem6.git"
+git_repo_owner: "AnSpire"
+git_branch: "main"
+git_result_branch: "jenkins-result"
+
+shared_project_dir: "/var/lib/jenkins/shared/project"
+
+# Единственное место, где задаётся список файлов для Job_2 — меняется
+# только здесь, шаблоны и пайплайн ничего не хардкодят.
+files_to_delete:
+  - "DATA.md"
+  - "tests/test_smoke.py"
+
+jenkins_plugin_manager_version: "2.15.0"
+
+jenkins_plugins:
+  - git
+  - workflow-aggregator
+  - configuration-as-code
+  - job-dsl
